@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  ctf-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ctf-challenge
+    ports:
+      - "8088:80"
+      - "5000:5000"
+    volumes:
+      - .:/app
+      - nginx-cache:/var/cache/nginx
+    environment:
+      - FLASK_ENV=development
+
+volumes:
+  nginx-cache:

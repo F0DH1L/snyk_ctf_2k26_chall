@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureBank - Online Banking Login</title>
+    <link rel="stylesheet" href="/static/css/auth.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🏦 SecureBank</h1>
+        <p class="subtitle">Sign in to your online banking account</p>
+        
+        <div class="error" id="error"></div>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            
+            <button type="submit">Sign In</button>
+        </form>
+        
+        <div class="hint">
+            <strong>Demo Accounts:</strong><br>
+            Customer: alice / alice123<br>
+            Customer: bob / bob123<br>
+            Banking Admin: admin / admin123
+            <br><br>
+            <a href="/register" style="color: #004d40; text-decoration: none; font-weight: 600;">Open a new account</a>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error');
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    localStorage.setItem('authToken', data.auth_token);
+                    localStorage.setItem('username', data.username);
+                    const tokenParts = data.auth_token.split('.');
+                    const payload = JSON.parse(atob(tokenParts[1]));
+                    window.location.href = '/profile?userId=' + payload.user_id;
+                } else {
+                    errorDiv.textContent = data.error || 'Login failed';
+                    errorDiv.style.display = 'block';
+                }
+            } catch (error) {
+                errorDiv.textContent = 'An error occurred. Please try again.';
+                errorDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

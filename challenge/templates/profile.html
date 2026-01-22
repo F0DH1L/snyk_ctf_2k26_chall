@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Dashboard - SecureBank</title>
+    <link rel="stylesheet" href="/static/css/profile.css">
+</head>
+<body>
+    <div class="navbar">
+        <h1>🏦 SecureBank Online Banking</h1>
+        <button onclick="logout()">Sign Out</button>
+    </div>
+    
+    <div class="container">
+        <div class="profile-card">
+            <div id="loading" class="loading">Loading account details...</div>
+            <div id="error" class="error-message" style="display: none;"></div>
+            <div id="profileContent" style="display: none;">
+                <div class="profile-header">
+                    <div class="avatar" id="avatar"></div>
+                    <div class="profile-info">
+                        <h2 id="displayName">Loading...</h2>
+                        <p id="email">Loading...</p>
+                        <p style="font-size: 12px; color: #888; margin-top: 5px;">Account Holder</p>
+                    </div>
+                </div>
+                
+                <div class="info-group">
+                    <label>Account Holder Name</label>
+                    <div class="value" id="username">Loading...</div>
+                </div>
+                
+                <div class="info-group">
+                    <label>Registered Email</label>
+                    <div class="value" id="emailValue">Loading...</div>
+                </div>
+                
+                
+                <div style="margin-top: 30px;">
+                    <button onclick="reportCurrentUrl()" style="width: 100%; padding: 12px; background: #c62828; color: white; border: none; border-radius: 5px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                        🚨 Report Suspicious Activity to Bank Security
+                    </button>
+                    <div id="reportStatus" style="margin-top: 10px; padding: 10px; border-radius: 5px; display: none;"></div>
+                </div>
+                
+                <div class="debug-info">
+                    <strong>Banking API Endpoint:</strong><br>
+                    <span id="apiUrl"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const authToken = localStorage.getItem('authToken');
+        if (!authToken) {
+            window.location.href = '/';
+        }
+        
+        function logout() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('username');
+            window.location.href = '/';
+        }
+        
+        async function loadUserProfile() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const userId = urlParams.get('userId');
+            
+            if (!userId) {
+                showError('No account ID provided');
+                return;
+            }
+            
+            const apiUrl = `http://${window.location.host}/api/profile/${userId}`;
+            
+            document.getElementById('apiUrl').textContent = apiUrl;
+            
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'GET',
+                    headers: {
+                        'X-Auth-Token': authToken,
+                        'Accept': 'application/json',
+                        'Accept-Encoding': 'gzip, deflate, br'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayUserData(data);
+                } else {
+                    showError(data.error || 'Failed to load account information');
+                }
+            } catch (err) {
+                console.error("Error loading user info:", err);
+                showError('Failed to load account data. Please contact bank support.');
+            }
+        }
+        
+        function displayUserData(data) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('profileContent').style.display = 'block';
+            
+            const username = data.username || 'Unknown';
+            const email = data.email || 'N/A';
+            
+            document.getElementById('displayName').textContent = username;
+            document.getElementById('email').textContent = email;
+            document.getElementById('username').textContent = username;
+            document.getElementById('emailValue').textContent = email;
+            document.getElementById('avatar').textContent = username.charAt(0).toUpperCase();
+        }
+        
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').textContent = message;
+            document.getElementById('error').style.display = 'block';
+        }
+        
+        async function reportCurrentUrl() {
+            const reportBtn = event.target;
+            const statusDiv = document.getElementById('reportStatus');
+            
+            reportBtn.disabled = true;
+            reportBtn.textContent = 'Reporting...';
+            statusDiv.style.display = 'none';
+            
+            try {
+                const currentUrl = window.location.href;
+                
+                const response = await fetch('/api/report', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Auth-Token': authToken
+                    },
+                    body: JSON.stringify({ url: currentUrl })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.textContent = '✅ ' + data.message;
+                    statusDiv.style.background = '#efe';
+                    statusDiv.style.color = '#363';
+                } else {
+                    statusDiv.textContent = '❌ ' + (data.error || 'Failed to report URL');
+                    statusDiv.style.background = '#fee';
+                    statusDiv.style.color = '#c33';
+                }
+                
+                statusDiv.style.display = 'block';
+                
+            } catch (error) {
+                statusDiv.textContent = '❌ An error occurred while reporting';
+                statusDiv.style.background = '#fee';
+                statusDiv.style.color = '#c33';
+                statusDiv.style.display = 'block';
+            } finally {
+                reportBtn.disabled = false;
+                reportBtn.textContent = '🚨 Report Suspicious Activity to Bank Security';
+            }
+        }
+        
+        loadUserProfile();
+    </script>
+</body>
+</html>
