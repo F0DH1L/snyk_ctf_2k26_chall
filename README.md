@@ -1,8 +1,10 @@
 ## Introduction
 
-I had the honor of being a challenge author for **Fetch The Flag CTF 2026**, organized by **Snyk** and **HackingHub**. I designed a web challenge called **SecureBank**, which was solved **34 times** out of more than 1000 players by the end of the competition.
+I had the opportunity to be a challenge author for **Fetch The Flag CTF 2026**, organized by **Snyk** and **HackingHub**. I designed a web challenge called **SecureBank**, which was solved **34 times** out of more than 1,000 players by the end of the competition.
 
-> **Want to try it yourself?** You can run the challenge locally before reading the writeup: [github.com/F0DH1L/snyk_ctf_2k26_chall](./challenge/)
+> **Want to try it yourself?**  
+> Play it on HackingHub: [app.hackinghub.io/hubs/snyk-ftf-26-secure-bank](https://app.hackinghub.io/hubs/snyk-ftf-26-secure-bank)  
+> Or run it locally: [github.com/F0DH1L/snyk_ctf_2k26_chall](https://github.com/F0DH1L/snyk_ctf_2k26_chall)
 
 ![Challenge on the platform](image.png)
 
